@@ -1,0 +1,24 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# App bundle assembled by `make app`
+build/
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local-only tooling state
+.impeccable/config.local.json
+*.nubbin-*.bak

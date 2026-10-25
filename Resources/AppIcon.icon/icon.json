@@ -1,0 +1,18 @@
+{
+  "fill" : {
+    "solid" : "srgb:0.78000,0.77000,0.98000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "art.png",
+          "name" : "art"
+        }
+      ]
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
