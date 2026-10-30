@@ -469,7 +469,8 @@ struct QuietPane: View {
             }
 
             Section {
-                Toggle(isOn: Binding(get: { prefs.notifyWhenAway }, set: setNotifyWhenAway)) {
+                // A closure, not a method reference: Swift 6.3 crashes thunking one to Binding's @isolated(any) setter.
+                Toggle(isOn: Binding(get: { prefs.notifyWhenAway }, set: { setNotifyWhenAway($0) })) {
                     Text("Send a notification")
                     if !Notifier.shared.available {
                         Text("Only available when running Nubbin.app.")
@@ -564,7 +565,7 @@ struct GeneralPane: View {
         Form {
             Section {
                 Toggle(isOn: Binding(get: { loginStatus == .enabled || loginStatus == .requiresApproval },
-                                     set: setLaunchAtLogin)) {
+                                     set: { setLaunchAtLogin($0) })) {
                     Text("Open at login")
                     if !isBundled {
                         Text("Only available when running Nubbin.app. Install it with make install.")
