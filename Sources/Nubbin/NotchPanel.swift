@@ -3,7 +3,8 @@ import SwiftUI
 
 enum Layout {
     /// Side area beside the notch while folded: dots on the left, count on the right.
-    static let wing: CGFloat = 56
+    /// Fits four dots plus a "+N" overflow with an inset from the island's rounded edge.
+    static let wing: CGFloat = 72
     static let expandedWidth: CGFloat = 468
     static let maxListHeight: CGFloat = 440
     static let listBottomInset: CGFloat = 10
@@ -85,8 +86,18 @@ final class NotchPanel: NSPanel {
 }
 
 /// Clicks land without activating Nubbin first.
+/// While the island takes the pointer, the global mouse monitor goes quiet; this tracking area keeps
+/// mouse-moved events flowing to the local monitor so leaving the island is noticed immediately.
 final class NotchHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if !trackingAreas.contains(where: { $0.owner === self && $0.options.contains(.mouseMoved) }) {
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+    }
 }
 
 struct NotchActions {
@@ -198,7 +209,7 @@ final class NotchController {
         if inside {
             setExpanded(true)
         } else {
-            scheduleFold(after: 0.3)
+            scheduleFold(after: 0.1)
         }
     }
 

@@ -228,7 +228,7 @@ private struct Constellation: View {
     let reduceMotion: Bool
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(Array(rows.prefix(Self.maxDots).enumerated()), id: \.element.id) { index, row in
                 Pip(activity: row.activity, size: 7, phase: Double(index) * 0.35, reduceMotion: reduceMotion)
                     .matchedGeometryEffect(id: row.id, in: namespace)
@@ -237,6 +237,7 @@ private struct Constellation: View {
                 Text("+\(rows.count - Self.maxDots)")
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Palette.secondary)
+                    .fixedSize()
             }
         }
         .accessibilityHidden(true)
