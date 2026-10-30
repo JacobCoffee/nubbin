@@ -33,7 +33,15 @@ In [zellij](https://zellij.dev), each row names its session and tab, and a click
 
 ## Install
 
-You need macOS 14 or later and Xcode 26 or later.
+Download `Nubbin-<version>.dmg` from [Releases](https://github.com/JacobCoffee/nubbin/releases) and drag Nubbin to Applications. It runs on Apple silicon with macOS 14 or later. Releases are immutable, and each one ships a CycloneDX SBOM, SHA-256 checksums, and GitHub build-provenance and SBOM attestations. Check that a download was built by this repo's release workflow:
+
+```sh
+gh attestation verify Nubbin-v0.2.0.dmg --repo JacobCoffee/nubbin
+```
+
+Unless a release says it's notarized, it's ad-hoc signed and macOS blocks the first launch: allow it in System Settings › Privacy & Security › **Open Anyway**.
+
+To build from source you need Xcode 26 or later:
 
 ```sh
 make install

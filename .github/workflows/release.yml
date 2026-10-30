@@ -1,0 +1,152 @@
+name: Release
+
+# Push an annotated tag to release. Its message body becomes the release notes:
+#   git tag -a v0.3.0 --cleanup=verbatim -F notes.md && git push origin v0.3.0
+# The tag must match CFBundleShortVersionString in Resources/Info.plist.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign, attest & release
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: write # create the release
+      id-token: write # sign attestations
+      attestations: write # store attestations
+    env:
+      TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # checkout leaves the tag lightweight; fetch the annotated tag for its notes.
+      - name: Fetch tag
+        run: git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+
+      - name: Check version matches tag
+        run: |
+          version=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error file=Resources/Info.plist::CFBundleShortVersionString is $version but the tag is $TAG"
+            exit 1
+          fi
+
+      # ── Signing ──────────────────────────────────────────────────
+      - name: Detect signing and notarization secrets
+        id: secrets
+        env:
+          CERT_B64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASS: ${{ secrets.APPLE_APP_PASSWORD }}
+          NOTARY_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CERT_B64" ] && [ -n "$CERT_PASS" ]; then has_cert=true; else has_cert=false; fi
+          if [ -n "$NOTARY_ID" ] && [ -n "$NOTARY_PASS" ] && [ -n "$NOTARY_TEAM" ]; then has_notary=true; else has_notary=false; fi
+          echo "has_cert=$has_cert" >> "$GITHUB_OUTPUT"
+          echo "has_notary=$has_notary" >> "$GITHUB_OUTPUT"
+          if [ "$has_cert" != true ]; then
+            echo "::notice::No Developer ID certificate: the app will be ad-hoc signed and not notarized"
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.secrets.outputs.has_cert == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 32)
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychain -d user -s "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          {
+            echo "SIGN_IDENTITY=$identity"
+            echo "CODESIGN_FLAGS=--options runtime --timestamp"
+          } >> "$GITHUB_ENV"
+
+      # ── Build ────────────────────────────────────────────────────
+      - name: Build and sign app
+        run: make app
+
+      - name: Notarize app
+        if: steps.secrets.outputs.has_cert == 'true' && steps.secrets.outputs.has_notary == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent build/Nubbin.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple build/Nubbin.app
+
+      - name: Package
+        run: |
+          codesign --verify --strict build/Nubbin.app
+          scripts/make_dmg.sh build/Nubbin.app "Nubbin-$TAG.dmg"
+          ditto -c -k --keepParent build/Nubbin.app "Nubbin-$TAG.zip"
+
+      # ── Supply chain ─────────────────────────────────────────────
+      - name: Generate SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: Nubbin-${{ github.ref_name }}.sbom.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate checksums
+        run: shasum -a 256 "Nubbin-$TAG.dmg" "Nubbin-$TAG.zip" "Nubbin-$TAG.sbom.json" > checksums-sha256.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            Nubbin-${{ github.ref_name }}.dmg
+            Nubbin-${{ github.ref_name }}.zip
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            Nubbin-${{ github.ref_name }}.dmg
+            Nubbin-${{ github.ref_name }}.zip
+          sbom-path: Nubbin-${{ github.ref_name }}.sbom.json
+
+      # ── Release ──────────────────────────────────────────────────
+      # Draft first, then publish: with immutable releases on, assets lock at publish.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -l --format='%(contents:body)' "$TAG" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --draft --verify-tag --title "Nubbin ${TAG#v}" \
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes \
+            "Nubbin-$TAG.dmg" "Nubbin-$TAG.zip" "Nubbin-$TAG.sbom.json" checksums-sha256.txt
+          gh release edit "$TAG" --draft=false
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          if [ -f "$keychain" ]; then security delete-keychain "$keychain"; fi

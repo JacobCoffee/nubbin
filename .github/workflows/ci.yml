@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    # actool needs Xcode 26 to compile the Icon Composer icon.
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build app and disk image
+        run: make dmg
+
+      - name: Check the bundle
+        run: |
+          codesign --verify --strict build/Nubbin.app
+          plutil -lint build/Nubbin.app/Contents/Info.plist
+          test -f build/Nubbin.app/Contents/Resources/Assets.car
+          # `Nubbin hook` with bad input must exit 0: agents run it on every event.
+          echo 'not json' | build/Nubbin.app/Contents/MacOS/Nubbin hook
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Nubbin-${{ github.sha }}
+          path: build/Nubbin.dmg
+          retention-days: 14

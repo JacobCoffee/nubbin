@@ -2,6 +2,8 @@
 
 APP_NAME    := Nubbin
 APP         := build/$(APP_NAME).app
+SIGN_IDENTITY  ?= -
+CODESIGN_FLAGS ?=
 INSTALL_DIR := $(HOME)/Applications
 INSTALLED   := $(INSTALL_DIR)/$(APP_NAME).app
 HOOK_BIN    := $(INSTALLED)/Contents/MacOS/$(APP_NAME)
@@ -23,7 +25,8 @@ build: ## Compile the release binary
 
 # The icon is an Icon Composer bundle; actool (Xcode) compiles it to Assets.car for macOS 26+
 # plus an AppIcon.icns fallback for older systems.
-app: build ## Assemble and ad-hoc sign build/Nubbin.app
+# SIGN_IDENTITY defaults to ad-hoc; release CI passes a Developer ID and hardened-runtime flags.
+app: build ## Assemble and sign build/Nubbin.app
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp .build/release/$(APP_NAME) $(APP)/Contents/MacOS/$(APP_NAME)
@@ -32,7 +35,10 @@ app: build ## Assemble and ad-hoc sign build/Nubbin.app
 	xcrun actool Resources/AppIcon.icon --compile $(APP)/Contents/Resources --platform macosx \
 		--minimum-deployment-target 14.0 --app-icon AppIcon \
 		--output-partial-info-plist build/AppIcon-partial.plist >/dev/null
-	codesign --force --sign - $(APP)
+	codesign --force $(CODESIGN_FLAGS) --sign "$(SIGN_IDENTITY)" $(APP)
+
+dmg: app ## Package build/Nubbin.dmg for drag-to-install
+	scripts/make_dmg.sh $(APP) build/$(APP_NAME).dmg
 
 install: app ## Install to ~/Applications
 	mkdir -p $(INSTALL_DIR)
@@ -65,5 +71,5 @@ unhooks: ## Disconnect every agent
 	python3 scripts/install_hooks.py --agent codex --uninstall
 	rm -f $(PI_EXT) $(OMP_EXT)
 
-.PHONY: help build app install run clean
+.PHONY: help build app dmg install run clean
 .PHONY: hooks unhooks
