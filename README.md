@@ -76,6 +76,60 @@ For a Claude Code approval, the hook waits for your answer. Claude keeps its own
 
 Set `NUBBIN_DEBUG=1` to log events to stderr.
 
+## Control API
+
+The same socket (`~/Library/Application Support/Nubbin/events.sock`) also answers control
+requests: list what Nubbin is showing, or jump to a row's pane, without clicking. Each request is
+one JSON object per connection with `"await": true`, and the reply is written back on that
+connection before it closes. `Nubbin ctl` sends these for you:
+
+```sh
+Nubbin ctl list           # {"ok":true,"rows":[...]}
+Nubbin ctl focus <row id> # {"ok":true} or {"ok":false,"error":"unknown row"}
+```
+
+Raw requests, e.g. from another process:
+
+```jsonc
+// -> {"type":"list","await":true}
+{
+  "ok": true,
+  "rows": [
+    {
+      "id": "agent:omp:abc123",       // "agent:<agent>:<session id>" or "bell:<session>:<tab id>"
+      "source": "agent",              // "agent" | "bell"
+      "agent": "omp",                 // "omp" | "claude" | "codex" | "pi" | null (bell rows)
+      "title": "checkout-api",
+      "model": "Claude Opus 5.5",     // null if the agent hasn't reported one
+      "cwd": "/Users/you/checkout-api", // null if unknown
+      "location": "atelier › loop",   // "session › tab" in zellij, null outside zellij
+      "detail": "Set up the users table", // what it's doing/asking/done with, null if none
+      "activity": "working",          // needsYou | error | done | working | idle
+      "since": "2026-01-01T12:00:00Z", // when `activity` last changed, ISO 8601 UTC
+      "zellij": { "session": "atelier", "tab_id": 3, "pane_id": 7 }, // null outside zellij
+      "terminal_bundle_id": "com.mitchellh.ghostty" // null if unknown
+    }
+  ]
+}
+```
+
+```jsonc
+// -> {"type":"focus","id":"agent:omp:abc123","await":true}
+{ "ok": true }
+// unknown id:
+{ "ok": false, "error": "unknown row" }
+```
+
+`focus` runs the exact code path a click on the row runs: it activates the row's terminal app,
+then switches zellij to its tab and pane, and clears a finished row when **Clear on open** is set. Malformed requests or an unrecognized `"type"` reply
+`{"ok":false,"error":"..."}` instead of hanging the connection. Agent hook events (the shape
+above, under "How it works") never carry a top-level `"type"` key, so the two are never confused.
+
+The socket is created with mode `0600`: only your user can connect, same as the hook path. Set
+`NUBBIN_SOCKET` to point at a different socket path, or `NUBBIN_SUPPORT_DIR` to change where
+Nubbin keeps the socket and everything else (sounds, etc.) — both the app and `Nubbin ctl`/`Nubbin
+hook` honor these, which is how you'd run an isolated instance for testing.
+
 ## Uninstall
 
 ```sh

@@ -37,6 +37,8 @@ struct Row: Identifiable, Equatable {
     let agent: String?
     let title: String
     let model: String?
+    /// Working directory the agent reported; nil when unknown.
+    let cwd: String?
     /// "session › tab" in zellij.
     let location: String?
     let detail: String?
@@ -485,6 +487,7 @@ final class Store {
             agent: session.agent,
             title: session.title ?? projectName(session.cwd) ?? session.agent,
             model: session.model,
+            cwd: session.cwd.isEmpty ? nil : session.cwd,
             location: location(session: session.zellijSession, tab: pane?.tabName),
             detail: detail,
             prompt: session.activity == .needsYou ? session.promptDetail : nil,
@@ -510,6 +513,7 @@ final class Store {
             agent: nil,
             title: pane.flatMap { cleanPaneTitle($0.title) } ?? tabName,
             model: nil,
+            cwd: nil,
             location: location(session: bell.session, tab: tabName),
             detail: nil,
             prompt: nil,

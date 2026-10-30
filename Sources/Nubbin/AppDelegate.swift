@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.onZellijMappingNeeded = { [weak self] in self?.poller?.requestFullRefresh() }
 
         let server = EventServer { [weak self] data, token in
-            Task { @MainActor in self?.store.handleHook(data, token: token) }
+            Task { @MainActor in self?.handleIncoming(data, token: token) }
         }
         store.onReply = { [server] token, data in server.reply(token, data) }
         do {
@@ -112,6 +112,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         open(row)
     }
 
+    // MARK: control API
+
+    /// Routes one socket message: a `"type"` key means a control request (list rows, focus a row);
+    /// anything else is an agent hook event. Hook envelopes never carry a top-level `"type"` key,
+    /// so this split is unambiguous. See README for the request/reply shapes.
+    private func handleIncoming(_ data: Data, token: EventServer.Token?) {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let type = object["type"] as? String
+        else {
+            store.handleHook(data, token: token)
+            return
+        }
+        let reply: Data
+        switch type {
+        case "list":
+            reply = Control.listReply(store.rows)
+        case "focus":
+            if let id = object["id"] as? String, let row = store.rows.first(where: { $0.id == id }) {
+                open(row)
+                reply = Control.okReply()
+            } else {
+                reply = Control.errorReply("unknown row")
+            }
+        default:
+            reply = Control.errorReply("unknown type: \(type)")
+        }
+        if let token { server?.reply(token, reply) }
+    }
     // MARK: focus
 
     /// Bring the session's terminal forward, then switch zellij to its tab and pane.

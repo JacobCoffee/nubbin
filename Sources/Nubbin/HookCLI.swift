@@ -27,7 +27,7 @@ enum HookCLI {
         if awaitDecision { envelope["await"] = true }
         guard let data = try? JSONSerialization.data(withJSONObject: envelope) else { exit(0) }
 
-        let reply = send(data, awaitReply: awaitDecision)
+        let reply = SocketClient.send(data, awaitReply: awaitDecision, timeout: 590)
         if let reply,
            let decision = (try? JSONSerialization.jsonObject(with: reply)) as? [String: Any],
            decision["behavior"] is String,
@@ -37,51 +37,6 @@ enum HookCLI {
             FileHandle.standardOutput.write(output + Data("\n".utf8))
         }
         exit(0)
-    }
-
-    /// Returns the app's reply when `awaitReply`; nil when the app is gone or released the request.
-    private static func send(_ data: Data, awaitReply: Bool) -> Data? {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        defer { close(fd) }
-
-        var sendTimeout = timeval(tv_sec: 0, tv_usec: 300_000)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, [Int32(1)], socklen_t(MemoryLayout<Int32>.size))
-
-        guard var addr = unixAddress(Paths.socket.path) else { return nil }
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connected == 0 else { return nil }
-
-        let sent = data.withUnsafeBytes { raw -> Bool in
-            guard let base = raw.baseAddress else { return false }
-            var offset = 0
-            while offset < raw.count {
-                let written = write(fd, base + offset, raw.count - offset)
-                if written <= 0 { return false }
-                offset += written
-            }
-            return true
-        }
-        guard sent, awaitReply else { return nil }
-
-        // Signal end of message, then wait for the answer. Claude's hook timeout (set to 600s by
-        // the installer) bounds this; the app closes the connection when the prompt is answered elsewhere.
-        shutdown(fd, SHUT_WR)
-        var receiveTimeout = timeval(tv_sec: 590, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &receiveTimeout, socklen_t(MemoryLayout<timeval>.size))
-        var reply = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while reply.count < 1 << 20 {
-            let count = read(fd, &buffer, buffer.count)
-            if count <= 0 { break }
-            reply.append(buffer, count: count)
-        }
-        return reply.isEmpty ? nil : reply
     }
 }
 

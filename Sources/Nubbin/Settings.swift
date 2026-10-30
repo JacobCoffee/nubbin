@@ -3,12 +3,22 @@ import Observation
 import SwiftUI
 
 enum Paths {
+    /// Isolates the socket/support dir for smoke tests without touching the user's running Nubbin.
     static var supportDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = ProcessInfo.processInfo.environment["NUBBIN_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/Nubbin", directoryHint: .isDirectory)
     }
 
-    static var socket: URL { supportDir.appending(path: "events.sock") }
+    static var socket: URL {
+        if let override = ProcessInfo.processInfo.environment["NUBBIN_SOCKET"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return supportDir.appending(path: "events.sock")
+    }
+
     /// Sound files the user dropped into Settings, copied here so they survive the original moving.
     static var soundsDir: URL { supportDir.appending(path: "Sounds", directoryHint: .isDirectory) }
 }
