@@ -167,14 +167,17 @@ final class SoundEngine {
         music.volume = 0
     }
 
-    /// Play a moment's chime as configured. Returns the loudness envelope of what plays (also when muted,
+    /// Play a moment's chime as configured. Returns the loudness envelope of what plays (also when quiet,
     /// so the ring still moves in time with the sound you'd have heard).
     @discardableResult
     func play(_ moment: Moment, ignoringMute: Bool = false) -> [Float] {
         let style = Preferences.shared.style(moment)
         guard let url = SoundLibrary.url(style.sound), let analysis = SoundAnalysis.of(url) else { return [] }
         let envelope = analysis.envelope(trimStart: style.trimStart, trimEnd: style.trimEnd)
-        guard ignoringMute || !Preferences.shared.muted else { return envelope }
+        if !ignoringMute, let reason = Quiet.reason() {
+            debugLog("quiet: \(reason)")
+            return envelope
+        }
         schedule(url: url, from: style.trimStart, to: style.trimEnd, volume: style.volume, moment: nil)
         return envelope
     }

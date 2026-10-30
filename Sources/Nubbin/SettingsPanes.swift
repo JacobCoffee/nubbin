@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
@@ -55,8 +56,15 @@ struct MomentPane: View {
                         Text("After 2 minutes").tag(120.0)
                         Text("After 5 minutes").tag(300.0)
                     } label: {
-                        Text("Remind me again")
-                        Text("If it's still waiting, ring once more.")
+                        Text("Remind me")
+                        Text("If it's still waiting, ring again.")
+                    }
+                    if prefs.reminderAfter > 0 {
+                        Picker("How many times", selection: $prefs.reminderLimit) {
+                            Text("Once").tag(1)
+                            Text("3 times").tag(3)
+                            Text("Until it's handled").tag(0)
+                        }
                     }
                 case .done:
                     Picker(selection: $prefs.doneAfter) {
@@ -371,7 +379,7 @@ struct WatchingPane: View {
                 }
                 Toggle(isOn: $prefs.hoverToOpen) {
                     Text("Open when the pointer reaches the notch")
-                    Text("Otherwise click the island to open it.")
+                    Text("Otherwise click the island to open it. Either way it folds when you move away.")
                 }
                 Picker("Fold an island that opened itself", selection: $prefs.autoFoldAfter) {
                     Text("After 5 seconds").tag(5.0)
@@ -389,9 +397,146 @@ struct WatchingPane: View {
             } header: {
                 PaneHeader(title: "While watching", explanation: "How the island behaves around you.")
             }
+
+            Section("Island") {
+                Picker(selection: $prefs.dotsOnlyForAttention) {
+                    Text("Every session").tag(false)
+                    Text("Only ones that need you or failed").tag(true)
+                } label: {
+                    Text("Dots beside the notch")
+                    Text("Working and finished sessions are still listed when the island opens.")
+                }
+                Toggle(isOn: $prefs.clearOnOpen) {
+                    Text("Clear finished sessions when you open them")
+                    Text("Clicking a finished or failed session, or a tab bell, jumps to it and removes its row.")
+                }
+                Picker("Show the island on", selection: $prefs.display) {
+                    ForEach(DisplayChoice.allCases) { Text($0.label).tag($0) }
+                }
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+    }
+}
+
+// MARK: quiet
+
+struct QuietPane: View {
+    @State private var focusReadable = Focus.isOn != nil
+    @State private var notificationsDenied = false
+    @State private var testSent = false
+
+    var body: some View {
+        @Bindable var prefs = Preferences.shared
+        Form {
+            Section {
+                Toggle("Mute all chimes", isOn: $prefs.muted)
+                Toggle(isOn: $prefs.quietDuringFocus) {
+                    Text("During Focus")
+                    if !focusReadable {
+                        Text("Nubbin can't see your Focus state. Give it Full Disk Access in System Settings › Privacy & Security.")
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Do Not Disturb or any Focus you turn on. Scheduled Focus isn't visible to apps; use quiet hours.")
+                    }
+                }
+                if prefs.quietDuringFocus && !focusReadable {
+                    Button("Open Full Disk Access") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                    }
+                }
+                Toggle(isOn: $prefs.quietDuringCalls) {
+                    Text("During calls")
+                    Text("While any app is using your microphone or camera.")
+                }
+                Toggle(isOn: $prefs.quietWhileMirroring) {
+                    Text("While presenting")
+                    Text("While your display is mirrored, as with AirPlay or a projector.")
+                }
+                Toggle("Quiet hours", isOn: $prefs.quietHours)
+                if prefs.quietHours {
+                    DatePicker("From", selection: minutes($prefs.quietStart), displayedComponents: .hourAndMinute)
+                    DatePicker("To", selection: minutes($prefs.quietEnd), displayedComponents: .hourAndMinute)
+                }
+                if let reason = Quiet.reason() {
+                    Label("Chimes are off right now: \(reason).", systemImage: "bell.slash")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                PaneHeader(title: "Quiet",
+                           explanation: "When chimes stay silent. The notch still rings and the island still opens.")
+            }
+
+            Section {
+                Toggle(isOn: Binding(get: { prefs.notifyWhenAway }, set: setNotifyWhenAway)) {
+                    Text("Send a notification")
+                    if !Notifier.shared.available {
+                        Text("Only available when running Nubbin.app.")
+                    } else if notificationsDenied {
+                        Text("Notifications are off for Nubbin in System Settings › Notifications.").foregroundStyle(.red)
+                    } else {
+                        Text("Waits in Notification Center for when you're back. Click it to jump to the session.")
+                    }
+                }
+                .disabled(!Notifier.shared.available)
+                LabeledContent {
+                    TextField("Topic", text: $prefs.ntfyTopic, prompt: Text("my-secret-topic"))
+                        .frame(width: 220)
+                } label: {
+                    Text("Push to your phone with ntfy")
+                    Text("Install the ntfy app and subscribe to the same topic. Anyone who knows the topic can read it.")
+                }
+                if !prefs.ntfyTopic.isEmpty {
+                    LabeledContent("Server") {
+                        TextField("Server", text: $prefs.ntfyServer).frame(width: 220)
+                    }
+                    HStack {
+                        Spacer()
+                        if testSent { Text("Sent").foregroundStyle(.secondary) }
+                        Button("Send Test") {
+                            Notifier.shared.sendTest()
+                            testSent = true
+                        }
+                    }
+                }
+                Picker("You're away after", selection: $prefs.awayAfter) {
+                    Text("1 minute idle").tag(60.0)
+                    Text("5 minutes idle").tag(300.0)
+                    Text("15 minutes idle").tag(900.0)
+                    Text("30 minutes idle").tag(1800.0)
+                }
+            } header: {
+                Text("When you're away")
+            } footer: {
+                Text("Away means the screen is locked or there's been no keyboard or mouse input for a while. Agents set to show only stay silent here too.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .onAppear { focusReadable = Focus.isOn != nil }
+    }
+
+    /// A time-of-day picker over minutes after midnight.
+    private func minutes(_ value: Binding<Int>) -> Binding<Date> {
+        Binding(get: {
+            Calendar.current.date(bySettingHour: value.wrappedValue / 60, minute: value.wrappedValue % 60,
+                                  second: 0, of: Date()) ?? Date()
+        }, set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            value.wrappedValue = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        })
+    }
+
+    private func setNotifyWhenAway(_ enabled: Bool) {
+        Preferences.shared.notifyWhenAway = enabled
+        guard enabled else { return }
+        Task {
+            let allowed = await Notifier.shared.requestPermission()
+            notificationsDenied = !allowed
+            if !allowed { Preferences.shared.notifyWhenAway = false }
+        }
     }
 }
 
@@ -399,6 +544,10 @@ struct WatchingPane: View {
 
 struct GeneralPane: View {
     @State private var loginStatus = SMAppService.mainApp.status
+    @State private var loginError: String?
+    @State private var transferMessage: String?
+    /// Login items need an app bundle; a bare `swift run` binary can't register.
+    private let isBundled = Bundle.main.bundleURL.pathExtension == "app"
 
     private static let terminals: [(name: String, id: String)] = [
         ("Alacritty", "org.alacritty"), ("Ghostty", "com.mitchellh.ghostty"), ("iTerm2", "com.googlecode.iterm2"),
@@ -417,12 +566,21 @@ struct GeneralPane: View {
                 Toggle(isOn: Binding(get: { loginStatus == .enabled || loginStatus == .requiresApproval },
                                      set: setLaunchAtLogin)) {
                     Text("Open at login")
-                    if loginStatus == .requiresApproval {
+                    if !isBundled {
+                        Text("Only available when running Nubbin.app. Install it with make install.")
+                    } else if let loginError {
+                        Text(loginError).foregroundStyle(.red)
+                    } else if loginStatus == .requiresApproval {
                         Text("Waiting for your approval in System Settings › General › Login Items.")
                     }
                 }
-                if loginStatus == .requiresApproval {
+                .disabled(!isBundled)
+                if loginStatus == .requiresApproval || loginError != nil {
                     Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                }
+                Toggle(isOn: $prefs.showMenuBarIcon) {
+                    Text("Show in menu bar")
+                    Text("When hidden, open Settings from the island's gear, or by opening Nubbin again.")
                 }
                 Picker(selection: $prefs.terminalBundleID) {
                     ForEach(installed, id: \.id) { terminal in
@@ -437,9 +595,27 @@ struct GeneralPane: View {
                     Text("Terminal")
                     Text("Brought forward when you click a session that didn't say where it runs.")
                 }
-                Toggle("Mute all chimes", isOn: $prefs.muted)
             } header: {
                 PaneHeader(title: "General", explanation: "Nubbin itself.")
+            }
+
+            Section {
+                LabeledContent {
+                    HotkeyRecorder(hotkey: $prefs.islandHotkey)
+                } label: {
+                    Text("Open the island")
+                    Text("Press again to fold it.")
+                }
+                LabeledContent {
+                    HotkeyRecorder(hotkey: $prefs.jumpHotkey)
+                } label: {
+                    Text("Jump to the session that needs you")
+                    Text("Brings its terminal forward and switches to its zellij pane.")
+                }
+            } header: {
+                Text("Keyboard shortcuts")
+            } footer: {
+                Text("Work from any app.").foregroundStyle(.secondary)
             }
 
             Section {
@@ -454,6 +630,14 @@ struct GeneralPane: View {
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    VStack(alignment: .trailing, spacing: 6) {
+                        HStack {
+                            Button("Import Settings…", action: importSettings)
+                            Button("Export Settings…", action: exportSettings)
+                        }
+                        Text(transferMessage ?? "Sounds you added aren't included.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -462,11 +646,37 @@ struct GeneralPane: View {
         .scrollContentBackground(.hidden)
     }
 
+    private func exportSettings() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Nubbin Settings.plist"
+        panel.allowedContentTypes = [.propertyList]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Preferences.shared.exportData().write(to: url)
+            transferMessage = "Exported to \(url.lastPathComponent)."
+        } catch {
+            transferMessage = "Couldn't export: \(error.localizedDescription)"
+        }
+    }
+
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.propertyList]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Preferences.shared.importData(Data(contentsOf: url))
+            transferMessage = "Imported \(url.lastPathComponent)."
+        } catch {
+            transferMessage = "Couldn't import: \(error.localizedDescription)"
+        }
+    }
+
     private func setLaunchAtLogin(_ enabled: Bool) {
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            loginError = nil
         } catch {
-            NSSound.beep()
+            loginError = "Couldn't \(enabled ? "add" : "remove") the login item: \(error.localizedDescription)"
         }
         loginStatus = SMAppService.mainApp.status
     }
@@ -493,10 +703,31 @@ struct ConnectionsPane: View {
                     Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
                 }
             }
+
+            Section {
+                ForEach(Integration.allCases) { integration in
+                    alertPicker(integration.name, agent: integration.rawValue)
+                }
+                alertPicker("zellij tab bells", agent: "bell")
+            } header: {
+                Text("When each one wants you")
+            } footer: {
+                Text("Show only keeps the row and dot but never chimes, rings, opens the island, or notifies. Hide ignores it entirely.")
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .onAppear { connections.refresh() }
+    }
+
+    private func alertPicker(_ name: String, agent: String) -> some View {
+        let prefs = Preferences.shared
+        return Picker(name, selection: Binding(get: { prefs.alert(for: agent) },
+                                               set: { prefs.setAlert($0, for: agent) })) {
+            ForEach(AgentAlert.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
     }
 }
 
@@ -540,4 +771,78 @@ private struct ConnectionRow: View {
         case .notInstalled: "Not on this Mac"
         }
     }
+}
+
+// MARK: shortcuts
+
+/// Click, then press the shortcut. Esc cancels; Delete clears.
+private struct HotkeyRecorder: View {
+    @Binding var hotkey: Hotkey?
+    @State private var recording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: { recording ? stop() : start() }) {
+                Text(recording ? "Type shortcut…" : hotkey?.label ?? "Record Shortcut")
+                    .monospacedDigit()
+                    .frame(minWidth: 120)
+            }
+            if hotkey != nil && !recording {
+                Button { hotkey = nil } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Clear shortcut")
+                    .accessibilityLabel("Clear shortcut")
+            }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    private func start() {
+        recording = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            MainActor.assumeIsolated { record(event) }
+            return nil
+        }
+    }
+
+    private func stop() {
+        recording = false
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    private func record(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        switch Int(event.keyCode) {
+        case kVK_Escape:
+            stop()
+        case kVK_Delete where flags.isEmpty, kVK_ForwardDelete where flags.isEmpty:
+            hotkey = nil
+            stop()
+        default:
+            // Without ⌘, ⌥ or ⌃ it would swallow ordinary typing everywhere.
+            guard !flags.isDisjoint(with: [.command, .option, .control]) else { return NSSound.beep() }
+            hotkey = Hotkey(keyCode: UInt32(event.keyCode), modifiers: flags.rawValue, key: Self.name(of: event))
+            stop()
+        }
+    }
+
+    private static func name(of event: NSEvent) -> String {
+        switch Int(event.keyCode) {
+        case kVK_Space: "Space"
+        case kVK_Return: "↩"
+        case kVK_Tab: "⇥"
+        case kVK_LeftArrow: "←"
+        case kVK_RightArrow: "→"
+        case kVK_UpArrow: "↑"
+        case kVK_DownArrow: "↓"
+        case let code where fKeys.contains(code): "F\(fKeys.firstIndex(of: code)! + 1)"
+        default: (event.characters(byApplyingModifiers: []) ?? "?").uppercased()
+        }
+    }
+
+    private static let fKeys = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+                                kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20]
 }

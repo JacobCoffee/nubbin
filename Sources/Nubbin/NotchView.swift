@@ -74,13 +74,22 @@ struct NotchView: View {
     private func header(rows: [Row]) -> some View {
         HStack(spacing: 0) {
             if ui.expanded {
-                Text(summary(rows))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Palette.primary)
-                    .padding(.leading, 18)
-                    .transition(.opacity)
+                // Each side gets only the space beside the hardware notch; anything wider hides behind it.
+                let side = (Layout.expandedWidth - ui.geometry.notchWidth) / 2
+                let parts = summaryParts(rows)
+                ViewThatFits(in: .horizontal) {
+                    ForEach((1...parts.count).reversed(), id: \.self) { count in
+                        Text(parts.prefix(count).joined(separator: " · ")).fixedSize()
+                    }
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.primary)
+                .padding(.leading, 18)
+                .padding(.trailing, 8)
+                .frame(width: side, alignment: .leading)
+                .transition(.opacity)
                 Spacer(minLength: ui.geometry.notchWidth)
-                let muted = Preferences.shared.muted
+                let muted = Preferences.shared.isMuted
                 HStack(spacing: 2) {
                     headerButton(muted ? "bell.slash.fill" : "bell.fill",
                                  label: muted ? "Unmute chimes" : "Mute chimes",
@@ -89,6 +98,7 @@ struct NotchView: View {
                                  action: actions.openSettings)
                 }
                 .padding(.trailing, 10)
+                .frame(width: side, alignment: .trailing)
                 .transition(.opacity)
             } else if !ui.constellation.isEmpty {
                 Constellation(rows: ui.constellation, namespace: dots, reduceMotion: reduceMotion)
@@ -119,7 +129,10 @@ struct NotchView: View {
         .accessibilityLabel(label)
     }
 
-    private func summary(_ rows: [Row]) -> String {
+    private func summary(_ rows: [Row]) -> String { summaryParts(rows).joined(separator: " · ") }
+
+    /// Most important first, at most two; the header drops the second when it won't fit beside the notch.
+    private func summaryParts(_ rows: [Row]) -> [String] {
         let counts = Dictionary(grouping: rows, by: \.activity).mapValues(\.count)
         var parts: [String] = []
         if let n = counts[.needsYou] { parts.append(n == 1 ? "1 needs you" : "\(n) need you") }
@@ -127,7 +140,7 @@ struct NotchView: View {
         if let n = counts[.working] { parts.append("\(n) working") }
         if parts.count < 2, let n = counts[.done] { parts.append("\(n) done") }
         if parts.isEmpty { parts.append(rows.count == 1 ? "1 idle session" : "\(rows.count) idle sessions") }
-        return parts.prefix(2).joined(separator: " · ")
+        return Array(parts.prefix(2))
     }
 
     // MARK: list

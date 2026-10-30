@@ -42,7 +42,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 }
 
 enum SettingsPane: Hashable {
-    case moment(Moment), watching, general, connections
+    case moment(Moment), watching, quiet, general, connections
 
     private static let defaultsKey = "lastSettingsPane"
 
@@ -52,6 +52,7 @@ enum SettingsPane: Hashable {
         if let moment = Moment(rawValue: key) { return .moment(moment) }
         switch key {
         case "watching": return .watching
+        case "quiet": return .quiet
         case "general": return .general
         case "connections": return .connections
         default: return .moment(.needsYou)
@@ -62,6 +63,7 @@ enum SettingsPane: Hashable {
         let key = switch self {
         case .moment(let moment): moment.rawValue
         case .watching: "watching"
+        case .quiet: "quiet"
         case .general: "general"
         case .connections: "connections"
         }
@@ -72,6 +74,7 @@ enum SettingsPane: Hashable {
         switch self {
         case .moment(let moment): moment.title
         case .watching: "While watching"
+        case .quiet: "Quiet"
         case .general: "General"
         case .connections: "Agents"
         }
@@ -116,7 +119,7 @@ final class StageModel {
     var actions: NotchActions {
         NotchActions(toggle: { [weak self] in self?.ui.expanded.toggle() },
                      select: { _ in }, dismiss: { _ in }, decide: { _, _ in },
-                     toggleMute: { Preferences.shared.muted.toggle() },
+                     toggleMute: { Preferences.shared.toggleMute() },
                      openSettings: {})
     }
 
@@ -147,6 +150,7 @@ struct SettingsRoot: View {
                 switch pane {
                 case .moment(let moment): MomentPane(moment: moment, rehearse: { rehearse(moment) })
                 case .watching: WatchingPane()
+                case .quiet: QuietPane()
                 case .general: GeneralPane()
                 case .connections: ConnectionsPane()
                 }
@@ -308,7 +312,7 @@ private struct PaneStrip: View {
     @Namespace private var indicator
 
     private let panes: [SettingsPane] = [.moment(.needsYou), .moment(.done), .moment(.error),
-                                         .watching, .general, .connections]
+                                         .watching, .quiet, .general, .connections]
 
     var body: some View {
         HStack(spacing: 4) {
@@ -334,6 +338,7 @@ private struct PaneStrip: View {
                     .frame(width: 8, height: 8)
                     .overlay(Circle().strokeBorder(.black.opacity(0.15)))
             case .watching: Image(systemName: "eye")
+            case .quiet: Image(systemName: "moon")
             case .general: Image(systemName: "gearshape")
             case .connections: Image(systemName: "point.3.connected.trianglepath.dotted")
             }

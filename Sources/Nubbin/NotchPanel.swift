@@ -20,9 +20,15 @@ struct NotchGeometry: Equatable {
     var notchHeight: CGFloat
     var hasNotch: Bool
 
-    /// The built-in notched display if present; otherwise a notch-sized area on the main screen.
+    /// The screen chosen in Settings; a notch-sized area at the top when it has no notch.
     @MainActor static func current() -> NotchGeometry {
-        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
+        let screens = NSScreen.screens
+        let primary = screens.first ?? NSScreen.main!
+        let screen: NSScreen = switch Preferences.shared.display {
+        case .notch: screens.first { $0.safeAreaInsets.top > 0 } ?? primary
+        case .primary: primary
+        case .pointer: screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? primary
+        }
         let frame = screen.frame
         if screen.safeAreaInsets.top > 0,
            let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
@@ -148,6 +154,10 @@ final class NotchController {
                 self?.placePanel()
             }
         }
+        // Window tiling and Space changes can shove the panel down the screen; put it back at the top.
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.placePanel() }
+        }
         let track: (NSEvent) -> Void = { [weak self] _ in
             MainActor.assumeIsolated { self?.trackPointer() }
         }
@@ -162,6 +172,7 @@ final class NotchController {
         }
 
         observeRows()
+        observeDisplay()
         refresh()
         placePanel()
         panel.orderFrontRegardless()
@@ -186,10 +197,12 @@ final class NotchController {
     func refresh() {
         let now = Date()
         let rows = store.rows
+        let prefs = Preferences.shared
         let constellation = rows.filter { row in
             switch row.activity {
-            case .needsYou, .error, .working: true
-            case .done: now.timeIntervalSince(row.since) < Preferences.shared.doneLingers
+            case .needsYou, .error: true
+            case .working: !prefs.dotsOnlyForAttention
+            case .done: !prefs.dotsOnlyForAttention && now.timeIntervalSince(row.since) < prefs.doneLingers
             case .idle: false
             }
         }
@@ -198,19 +211,21 @@ final class NotchController {
         trackPointer()
     }
 
-    private func toggle() {
+    /// The island hotkey and menu bar: open it, or fold it if open.
+    func toggle() {
         if ui.expanded { setExpanded(false) } else { flash() }
     }
 
+    /// Leaving folds the island whichever way it opened; reaching it opens only with hover to open.
     private func hover(_ inside: Bool) {
         hovering = inside
+        if !inside {
+            if ui.expanded { scheduleFold(after: 0.1) }
+            return
+        }
         guard Preferences.shared.hoverToOpen else { return }
         foldTask?.cancel()
-        if inside {
-            setExpanded(true)
-        } else {
-            scheduleFold(after: 0.1)
-        }
+        setExpanded(true)
     }
 
     private func scheduleFold(after seconds: TimeInterval) {
@@ -245,9 +260,10 @@ final class NotchController {
     private func placePanel() {
         let g = ui.geometry
         let height = g.notchHeight + Layout.maxListHeight + Layout.listBottomInset + 24
-        panel.setFrame(NSRect(x: g.screenFrame.minX, y: g.screenFrame.maxY - height,
-                              width: g.screenFrame.width, height: height),
-                       display: true)
+        let frame = NSRect(x: g.screenFrame.minX, y: g.screenFrame.maxY - height, width: g.screenFrame.width, height: height)
+        guard panel.frame != frame else { return }
+        if panel.frame.size == frame.size { debugLog("panel moved to \(panel.frame); back to \(frame)") }
+        panel.setFrame(frame, display: true)
     }
 
     /// Screen rect of the island's target shape, with a little slop so the edge isn't twitchy.
@@ -258,7 +274,31 @@ final class NotchController {
                       width: size.width + 12, height: size.height + 4)
     }
 
+    private func observeDisplay() {
+        withObservationTracking {
+            _ = Preferences.shared.display
+            _ = Preferences.shared.dotsOnlyForAttention
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.moveToChosenScreen()
+                self?.refresh()
+                self?.observeDisplay()
+            }
+        }
+    }
+
+    private func moveToChosenScreen() {
+        let geometry = NotchGeometry.current()
+        guard geometry != ui.geometry else { return }
+        ui.geometry = geometry
+        placePanel()
+    }
+
     private func trackPointer() {
+        if Preferences.shared.display == .pointer,
+           !NSMouseInRect(NSEvent.mouseLocation, ui.geometry.screenFrame, false) {
+            moveToChosenScreen()
+        }
         let inside = !store.rows.isEmpty && hoverRect.contains(NSEvent.mouseLocation)
         panel.ignoresMouseEvents = !inside
         if inside != hovering { hover(inside) }

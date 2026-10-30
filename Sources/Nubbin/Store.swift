@@ -67,7 +67,8 @@ private struct AgentSession {
     /// Latest tool it started while working (omp reports these).
     var doing: String?
     var workStarted: Date?
-    var reminded = false
+    /// Reminders rung since it last changed state.
+    var reminders = 0
     var zellijSession: String?
     var zellijPaneID: Int?
     var terminalBundleID: String?
@@ -78,7 +79,7 @@ private struct AgentSession {
     mutating func set(_ activity: Activity, ask: String? = nil, detail: PromptDetail? = nil) {
         if activity != self.activity {
             since = Date()
-            reminded = false
+            reminders = 0
         }
         self.activity = activity
         self.ask = ask
@@ -91,7 +92,7 @@ private struct BellTab {
     let session: String
     let tabID: Int
     let since: Date
-    var reminded = false
+    var reminders = 0
     /// Hidden by the user until the tab is visited and rings again.
     var dismissed = false
 }
@@ -117,10 +118,12 @@ final class Store {
     @ObservationIgnored var onReply: ((EventServer.Token, Data) -> Void)?
 
     var rows: [Row] {
-        let agentRows = sessions.values.map(row(for:))
+        let prefs = Preferences.shared
+        let agentRows = sessions.values.filter { prefs.alert(for: $0.agent) != .hidden }.map(row(for:))
         let covered = coveredTabs()
+        let bellsHidden = prefs.alert(for: nil) == .hidden
         let bellRows = bells.compactMap { key, bell in
-            bell.dismissed || covered.contains(key) ? nil : row(for: bell)
+            bellsHidden || bell.dismissed || covered.contains(key) ? nil : row(for: bell)
         }
         return (agentRows + bellRows).sorted { ($0.activity, $1.since) < ($1.activity, $0.since) }
     }
@@ -254,7 +257,8 @@ final class Store {
         case .done:
             // Short tasks finish while you're still watching; and done rings even in the focused tab.
             guard let start = session.workStarted,
-                  Date().timeIntervalSince(start) >= Preferences.shared.doneAfter else { return }
+                  Date().timeIntervalSince(start) >= Preferences.shared.doneAfter,
+                  Preferences.shared.alert(for: row.agent) == .chime else { return }
             onAttention?(row, .done)
         case .working, .idle:
             break
@@ -322,20 +326,23 @@ final class Store {
 
     // MARK: reminders and housekeeping
 
-    /// Ring once more for anything still waiting after `Preferences.reminderAfter` (0: never).
+    /// Ring again for anything still waiting, every `Preferences.reminderAfter` (0: never),
+    /// up to `Preferences.reminderLimit` times (0: until it's handled).
     func remindOverdue() {
         let after = Preferences.shared.reminderAfter
+        let limit = Preferences.shared.reminderLimit
         guard after > 0 else { return }
         let now = Date()
-        for (id, session) in sessions where session.activity == .needsYou && !session.reminded
-            && now.timeIntervalSince(session.since) >= after {
-            sessions[id]?.reminded = true
+        func due(_ since: Date, _ reminders: Int) -> Bool {
+            (limit == 0 || reminders < limit) && now.timeIntervalSince(since) >= after * Double(reminders + 1)
+        }
+        for (id, session) in sessions where session.activity == .needsYou && due(session.since, session.reminders) {
+            sessions[id]?.reminders += 1
             attention(row(for: session), .needsYou)
         }
         let covered = coveredTabs()
-        for (key, bell) in bells where !bell.reminded && !bell.dismissed && !covered.contains(key)
-            && now.timeIntervalSince(bell.since) >= after {
-            bells[key]?.reminded = true
+        for (key, bell) in bells where !bell.dismissed && !covered.contains(key) && due(bell.since, bell.reminders) {
+            bells[key]?.reminders += 1
             attention(row(for: bell), .needsYou)
         }
     }
@@ -422,6 +429,10 @@ final class Store {
     // MARK: helpers
 
     private func attention(_ row: Row, _ moment: Moment) {
+        guard Preferences.shared.alert(for: row.agent) == .chime else {
+            debugLog("suppressed \(row.id): agent is set to stay silent")
+            return
+        }
         guard !isWatching(row) else {
             debugLog("suppressed \(row.id): tab is focused")
             return
