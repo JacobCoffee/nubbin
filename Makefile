@@ -41,6 +41,7 @@ install: app ## Install to ~/Applications
 
 run: install ## Install, then restart the app
 	-pkill -x $(APP_NAME)
+	while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
 	open $(INSTALLED)
 
 clean: ## Remove build output

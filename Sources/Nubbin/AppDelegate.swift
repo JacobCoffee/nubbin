@@ -16,8 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A bare `swift run` binary isn't listed under its embedded bundle ID, so compare PIDs, not counts.
+        let pid = ProcessInfo.processInfo.processIdentifier
         if let bundleID = Bundle.main.bundleIdentifier,
-           NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).count > 1 {
+           NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).contains(where: { $0.processIdentifier != pid }) {
             NSApp.terminate(nil) // a second copy would steal the socket
             return
         }
